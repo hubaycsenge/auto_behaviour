@@ -101,10 +101,22 @@ the defaults in `abcoder/common/config.py`. `$ABC_CONFIG` overrides the path.
 }
 ```
 
-`jobs_root` **must** be on shared storage — every compute node has to read it.
-`~/abc_jobs` under `/nas/home` satisfies that; `/tmp` does not, since `/tmp` is
-node-local (a fact worth remembering when debugging: a script written to `/tmp`
-on the login node does not exist on nipg38).
+### Everything the tasks touch must be on shared storage
+
+Three things have to be readable from a compute node, not just from nipg1:
+
+- **`jobs_root`** — the tasks read the manifest and write results there;
+- **the ABC checkout itself** — the sbatch script puts it on `PYTHONPATH`, so a
+  clone in `/tmp` gives every task `ModuleNotFoundError: No module named
+  'abcoder'`;
+- **the Python interpreter** — same reason.
+
+`/nas/home` satisfies all three. `/tmp`, `/var/tmp`, `/run` and `/dev/shm` do
+not: each node has its own, so a file written there on the login node simply
+does not exist on nipg38.
+
+`abc submit` checks this before queueing anything and refuses with an
+explanation rather than letting the array run and fail identically forty times.
 
 ## Model weights
 
@@ -124,6 +136,11 @@ packages with `importlib.util.find_spec` and reads the GPU from `nvidia-smi`.
 Importing torch costs seconds on a warm NAS and stalls indefinitely on a
 half-installed one, and the client runs `check` on every connect. Keep it that
 way if you extend it.
+
+**`No module named 'abcoder'` in a task log.** The checkout is somewhere the
+compute node cannot see — almost always `/tmp`. Move it under your home
+directory. `abc submit` refuses this case up front now, so an older job
+directory is the usual way to still hit it.
 
 **Tasks finish but write no results.** Look in `<job-dir>/logs/`. `abc status`
 also consults `sacct` and tells you when tasks ended in a terminal failure

@@ -125,6 +125,62 @@ class TestSbatch(unittest.TestCase):
         self.assertIn("set -euo pipefail", text)
 
 
+class TestSubmissionPreflight(unittest.TestCase):
+    """Catch the deployment mistakes that make every array task fail alike."""
+
+    def test_node_local_roots_are_recognised(self):
+        from abcoder.server.slurm import node_local
+
+        self.assertTrue(node_local("/tmp/checkout"))
+        self.assertTrue(node_local("/dev/shm/x"))
+        self.assertFalse(node_local(str(pathlib.Path.home())))
+
+    def test_a_checkout_on_node_local_storage_is_refused(self):
+        from abcoder.server.slurm import preflight
+
+        problems = preflight(pathlib.Path("/tmp/job"), "/tmp/abc", "/usr/bin/python3")
+        self.assertTrue(problems)
+        self.assertTrue(any("node-local" in p for p in problems))
+
+    def test_a_missing_interpreter_is_reported(self):
+        from abcoder.server.slurm import preflight
+
+        with tempfile.TemporaryDirectory(dir=pathlib.Path.home()) as d:
+            problems = preflight(pathlib.Path(d), d, str(pathlib.Path(d) / "nope"))
+        self.assertTrue(any("does not exist" in p for p in problems))
+
+    def test_submit_refuses_rather_than_queueing_a_doomed_job(self):
+        from abcoder.server.slurm import SlurmError, submit
+
+        job = JobSpec(job_id="jid")
+        job.observations = [ObservationSpec("o", server_media=["/x/o.mp4"])]
+        job.engines = [EngineSpec("mock")]
+        with tempfile.TemporaryDirectory() as d:
+            layout = JobLayout(pathlib.Path(d) / "job").ensure()
+            # A dry run reports the problem but still writes the scripts:
+            # inspecting them is the whole point of the mode.
+            _, warnings = submit(job, layout, python="/usr/bin/python3",
+                                 abc_root="/tmp/abc", dry_run=True)
+            self.assertTrue(any("node-local" in w for w in warnings))
+
+            # A real submission refuses rather than occupying the queue.
+            with self.assertRaises(SlurmError) as ctx:
+                submit(job, layout, python="/usr/bin/python3", abc_root="/tmp/abc")
+        self.assertIn("node-local", str(ctx.exception))
+
+    def test_the_script_pins_its_working_directory(self):
+        job = JobSpec(job_id="jid")
+        job.observations = [ObservationSpec("o", server_media=["/x/o.mp4"])]
+        engine = EngineSpec("mock")
+        job.engines = [engine]
+        with tempfile.TemporaryDirectory() as d:
+            layout = JobLayout(d).ensure()
+            text = render_sbatch(job, engine, layout, plan_shards(1, 1),
+                                 python="/v/bin/python", abc_root="/abc")
+        # Otherwise the task inherits a submitting directory the node may not have.
+        self.assertIn(f"#SBATCH --chdir={layout.root}", text)
+
+
 class TestEngineMatching(unittest.TestCase):
     def setUp(self):
         self.etho = ethogram_from_table(FIXTURES["ethogram_xlsx"])

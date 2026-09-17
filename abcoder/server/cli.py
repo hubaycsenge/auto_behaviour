@@ -239,9 +239,9 @@ def cmd_submit(args) -> int:
     hf_home = args.hf_home or str(pathlib.Path(cfg["server"].get("hf_home", "")).expanduser())
 
     try:
-        arrays = slurm_mod.submit(job, layout, python=python, abc_root=abc_root,
-                                  hf_home=hf_home, per_task=args.per_task,
-                                  dry_run=args.dry_run)
+        arrays, preflight_warnings = slurm_mod.submit(
+            job, layout, python=python, abc_root=abc_root, hf_home=hf_home,
+            per_task=args.per_task, dry_run=args.dry_run, force=args.force)
     except slurm_mod.SlurmError as exc:
         _emit({"error": str(exc)})
         return 1
@@ -249,7 +249,7 @@ def cmd_submit(args) -> int:
     _emit({
         "job_id": job.job_id, "job_dir": str(layout.root), "dry_run": args.dry_run,
         "submitted": [a.to_dict() for a in arrays],
-        "warnings": problems if problems else [],
+        "warnings": problems + preflight_warnings,
     })
     return 0
 
@@ -514,7 +514,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--abc-root", default="", help="directory holding the abcoder package")
     p.add_argument("--hf-home", default="", help="HF_HOME for model downloads")
     p.add_argument("--dry-run", action="store_true", help="write scripts, do not submit")
-    p.add_argument("--force", action="store_true", help="submit despite validation problems")
+    p.add_argument("--force", action="store_true",
+                   help="submit despite validation or shared-storage problems")
     p.set_defaults(func=cmd_submit)
 
     p = sub.add_parser("status", help="job progress, as JSON")

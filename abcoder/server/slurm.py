@@ -38,6 +38,52 @@ class SlurmError(RuntimeError):
     """A slurm command failed or could not be found."""
 
 
+#: Directory trees that are node-local on a typical cluster. A compute node
+#: mounts its own, so anything under one of these is invisible to the job even
+#: though it is perfectly readable from the login node.
+NODE_LOCAL_ROOTS = ("/tmp", "/var/tmp", "/run", "/dev/shm", "/scratch/local")
+
+
+def node_local(path: str | os.PathLike) -> bool:
+    """True when *path* lives somewhere each node has its own copy of."""
+    try:
+        resolved = pathlib.Path(path).expanduser().resolve()
+    except OSError:
+        return False
+    for root in NODE_LOCAL_ROOTS:
+        base = pathlib.Path(root)
+        if resolved == base or base in resolved.parents:
+            return True
+    return False
+
+
+def preflight(job_dir: pathlib.Path, abc_root: str, python: str) -> list[str]:
+    """Problems that would make every array task fail identically.
+
+    The array tasks import ABC from *abc_root*, run *python*, and read and
+    write *job_dir* -- all on a compute node. If any of those is node-local the
+    job queues happily and then every task dies with something unhelpful like
+    ``No module named 'abcoder'``. Catching it at submission costs nothing and
+    saves a baffling round trip through the queue.
+    """
+    problems: list[str] = []
+    for label, path in (("the ABC checkout", abc_root),
+                        ("the job directory", str(job_dir)),
+                        ("the Python interpreter", python)):
+        if not path:
+            continue
+        if node_local(path):
+            problems.append(
+                f"{label} is at {path}, which is node-local storage: every "
+                f"compute node has its own, so the job will not find it there. "
+                f"Move it onto shared storage -- your home directory on this "
+                f"cluster is shared."
+            )
+        elif not pathlib.Path(path).expanduser().exists():
+            problems.append(f"{label} does not exist: {path}")
+    return problems
+
+
 @dataclass
 class SubmittedArray:
     """One submitted array job."""
@@ -109,6 +155,10 @@ def render_sbatch(
         f"#SBATCH --time={s.time}",
         f"#SBATCH --output={layout.logs}/{engine.name}-%A_%a.out",
         f"#SBATCH --error={layout.logs}/{engine.name}-%A_%a.err",
+        # Without this a task inherits the submitting shell's directory, which
+        # may not exist on the compute node; slurmstepd then drops it into /tmp
+        # with a confusing warning.
+        f"#SBATCH --chdir={layout.root}",
     ]
     if s.gres:
         directives.append(f"#SBATCH --gres={s.gres}")
@@ -169,12 +219,23 @@ def submit(
     hf_home: str = "",
     per_task: int = 1,
     dry_run: bool = False,
-) -> list[SubmittedArray]:
-    """Write and submit one array job per enabled engine."""
+    force: bool = False,
+) -> tuple[list[SubmittedArray], list[str]]:
+    """Write and submit one array job per enabled engine.
+
+    Returns the submitted arrays and any preflight warnings. A dry run reports
+    the warnings but still writes the scripts -- inspecting them is the point
+    of the mode -- while a real submission refuses, because a job that cannot
+    possibly work should not occupy the queue.
+    """
     layout.ensure()
     shards = plan_shards(len(job.observations), per_task)
     if not shards:
         raise SlurmError("job has no observations to submit")
+
+    warnings = preflight(layout.root, abc_root, python)
+    if warnings and not dry_run and not force:
+        raise SlurmError("; ".join(warnings))
 
     submitted: list[SubmittedArray] = []
     for engine in job.enabled_engines:
@@ -196,7 +257,7 @@ def submit(
     _write_status(layout, {"job_id": job.job_id, "submitted": [a.to_dict() for a in submitted],
                            "n_observations": len(job.observations),
                            "n_shards": len(shards), "per_task": per_task})
-    return submitted
+    return submitted, warnings
 
 
 def _sbatch(script_path: pathlib.Path) -> str:
