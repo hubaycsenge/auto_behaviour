@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# ABC (Automated Behaviour Coder) launcher.
+#
+# Runs the CLI from this checkout without needing an install, so a cluster
+# deployment is "git clone, run setup, put bin on PATH". If an ABC virtualenv
+# exists next to the checkout or at $ABC_VENV, its interpreter is used.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(dirname "$here")"
+
+python="${ABC_PYTHON:-}"
+if [ -z "$python" ]; then
+  for candidate in "${ABC_VENV:-}/bin/python" "$root/.venv/bin/python" "$HOME/abc_env/bin/python"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then python="$candidate"; break; fi
+  done
+fi
+python="${python:-python3}"
+
+export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+exec "$python" -m abcoder.server.cli "$@"

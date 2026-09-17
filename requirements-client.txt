@@ -1,0 +1,8 @@
+# The GUI. PySide6-Essentials rather than full PySide6: ABC uses QtWidgets only.
+PySide6-Essentials>=6.6
+av>=11
+Pillow>=10
+numpy>=1.24
+# Only needed when the client cannot see the cluster's filesystem. Without it
+# the SSH transport falls back to the ssh/scp commands.
+# paramiko>=3.4

@@ -1,0 +1,9 @@
+# Core server install. Engine extras are installed separately, from a node with
+# the GPU you intend to use, so pip picks a matching CUDA wheel:
+#
+#   setup/install_server.sh --vllm    # vlm_vllm  (Ampere only)
+#   setup/install_server.sh --audio   # audio engine's CLAP classifier
+#   setup/install_server.sh --pose    # pose engine
+av>=11
+Pillow>=10
+numpy>=1.24

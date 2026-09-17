@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.venv/
+.venv-client/
+.scratch/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Job directories and coded output never belong in the repo.
+abc_jobs/
+*.boris.tmp
+
+# Study data stays local. `example/` holds real recordings, a real ethogram and
+# real coded observations; the test suite runs on the synthetic fixtures in
+# tests/fixtures.py instead, which reproduce the same format quirks.
+example/
+
+# Commissioned research briefs -- the author's material, not part of the tool.
+research_findings/

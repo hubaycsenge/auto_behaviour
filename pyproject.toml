@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "abcoder"
+version = "0.1.0"
+description = "ABC (Automated Behaviour Coder) - automated ethological event coding that writes BORIS projects"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+# Core only. Importing the package must not require torch, Qt or a codec: the
+# client inspects projects on machines with none of them, and the server's
+# engines are installed per node by setup/install_server.sh.
+dependencies = []
+
+[project.optional-dependencies]
+# PyAV carries its own ffmpeg; the NIPG nodes have no system one.
+media = ["av>=11", "Pillow>=10", "numpy>=1.24"]
+client = ["PySide6-Essentials>=6.6", "av>=11", "Pillow>=10", "numpy>=1.24"]
+ssh = ["paramiko>=3.4"]
+vllm = ["vllm>=0.10"]
+audio = ["torch", "transformers>=4.40", "numpy>=1.24"]
+pose = ["ultralytics>=8.3"]
+
+[project.scripts]
+abc = "abcoder.server.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["abcoder*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = [".venv", ".venv-client", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    # The engines catch broadly on purpose: one bad video must not take out an
+    # array task that still has forty others to code. Each site says why.
+    "BLE001",
+    # Qt overrides (closeEvent) and BORIS's own key spellings are not ours to rename.
+    "N802",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests import fixtures for their side effect of building a temp directory.
+"tests/*" = ["E501"]

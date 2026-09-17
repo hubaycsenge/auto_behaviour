@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Launch the ABC client GUI.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$here/abc" gui "$@"
