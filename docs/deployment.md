@@ -50,12 +50,24 @@ back to `get-pip.py`. There is also **no system ffmpeg anywhere on the
 cluster** — ABC depends on PyAV, which carries its own, and nothing in the
 codebase may shell out to an ffmpeg binary.
 
-For the llama.cpp engine:
+For the llama.cpp engine — **on the login node, not under `srun`**:
 
 ```bash
-srun -p medium --gres=gpu:1 --pty setup/install_llamacpp.sh   # builds sm_61;75;80;86
-setup/fetch_gguf.sh                                           # model + mmproj
+setup/install_llamacpp.sh     # builds for sm_61;75;80;86
+setup/fetch_gguf.sh           # model + its mmproj projector
 ```
+
+The CUDA toolkit is installed on nipg1 only: a compute node has `gcc` and
+`make` but neither `nvcc` nor `git`, so a CUDA build there is impossible. The
+binary this produces targets every GPU architecture in the cluster, so it runs
+on the compute nodes afterwards.
+
+The script also works around two things this cluster does not provide. There
+is no system `cmake`, so it falls back to one installed from PyPI into the ABC
+virtualenv. And CUDA 12.0 refuses any host compiler newer than gcc 12 while
+the default here is gcc 13, so it reads the limit from the toolkit's own
+`host_config.h` and points `CMAKE_CUDA_HOST_COMPILER` at the installed
+`g++-12`.
 
 ## Client
 
@@ -148,6 +160,10 @@ state, which is the usual sign of an out-of-memory kill or a wall-clock timeout.
 
 **`vlm_vllm` says the GPU is too old.** It is, on that node. Either target
 nipg38/10/32 with `nodelist`, or switch to `vlm_llamacpp`.
+
+**`cmake is required`, or `nvcc` not found, when building llama.cpp.** You ran
+it on a compute node. Only nipg1 has the CUDA toolkit and git; run
+`setup/install_llamacpp.sh` directly on the login node.
 
 **`llama-server did not become healthy`.** A 7B GGUF loading from cold NAS
 storage can take minutes; the default `startup_timeout` is 600 s. If it exits
