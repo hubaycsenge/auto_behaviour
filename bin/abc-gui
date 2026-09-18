@@ -11,34 +11,45 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(dirname "$here")"
 
-python="${ABC_CLIENT_PYTHON:-}"
-if [ -z "$python" ]; then
-  for candidate in \
-      "${ABC_CLIENT_VENV:-}/bin/python" \
-      "$root/.venv-client/bin/python" \
-      "$HOME/abc_client_env/bin/python"; do
-    if [ -n "$candidate" ] && [ -x "$candidate" ]; then python="$candidate"; break; fi
-  done
-fi
-# Last resort: whatever `abc` would use. Fine when one environment has both.
-if [ -z "$python" ]; then
-  python="${ABC_PYTHON:-}"
-  [ -z "$python" ] && [ -x "${ABC_VENV:-}/bin/python" ] && python="$ABC_VENV/bin/python"
-  python="${python:-python3}"
-fi
+# Build the candidate list conditionally. Writing "${VAR:-}/bin/python" is a
+# trap: with VAR unset it yields the non-empty string "/bin/python", which on
+# many systems exists and is executable, so a test for "non-empty" silently
+# selects the wrong interpreter.
+candidates=()
+[ -n "${ABC_CLIENT_PYTHON:-}" ] && candidates+=("$ABC_CLIENT_PYTHON")
+[ -n "${ABC_CLIENT_VENV:-}" ]   && candidates+=("$ABC_CLIENT_VENV/bin/python")
+candidates+=("$root/.venv-client/bin/python")
+[ -n "${HOME:-}" ]              && candidates+=("$HOME/abc_client_env/bin/python")
+[ -n "${ABC_PYTHON:-}" ]        && candidates+=("$ABC_PYTHON")
+[ -n "${ABC_VENV:-}" ]          && candidates+=("$ABC_VENV/bin/python")
+candidates+=("python3")
 
-if ! "$python" -c "import PySide6" >/dev/null 2>&1; then
+# Choose the first interpreter that actually has Qt, rather than the first that
+# merely exists: "it runs" and "it can open a window" are different questions.
+python=""
+fallback=""
+for candidate in "${candidates[@]}"; do
+  resolved="$(command -v "$candidate" 2>/dev/null || true)"
+  [ -n "$resolved" ] || continue
+  [ -n "$fallback" ] || fallback="$resolved"
+  if "$resolved" -c "import PySide6" >/dev/null 2>&1; then python="$resolved"; break; fi
+done
+
+if [ -z "$python" ]; then
   cat >&2 <<MSG
-The ABC client needs PySide6, and $python does not have it.
+The ABC client needs PySide6, and none of the interpreters it checked has it.
+
+Checked: ${candidates[*]}
+${fallback:+(first that exists: $fallback)}
 
 The client and server environments are separate: the server environment
-(ABC_VENV) deliberately has no Qt. Create the client environment:
+deliberately has no Qt. Create the client environment:
 
     $root/setup/install_client.sh
 
-then run this again. To use a specific interpreter instead:
+If you already have one somewhere else, point at its interpreter:
 
-    ABC_CLIENT_PYTHON=/path/to/python $root/bin/abc-gui
+    ABC_CLIENT_PYTHON=/full/path/to/bin/python $root/bin/abc-gui
 MSG
   exit 1
 fi
@@ -47,13 +58,11 @@ if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
   cat >&2 <<MSG
 No display is set, so a window cannot be opened.
 
-If you are on a cluster over SSH, reconnect with X11 forwarding:
+Over SSH, reconnect with X11 forwarding:  ssh -X <user>@<host>
 
-    ssh -X $(whoami)@$(hostname -f 2>/dev/null || hostname)
-
-Otherwise run the client on your own machine -- it reaches the cluster over
-SSH and does not need to run on it. Everything the GUI does is also available
-from the command line (abc new-job, abc submit, abc status, abc collect).
+Otherwise run the client on your own machine -- it reaches the cluster over SSH
+and does not need to run on it. Everything the GUI does is also available from
+the command line (abc new-job, abc submit, abc status, abc collect).
 MSG
   exit 1
 fi

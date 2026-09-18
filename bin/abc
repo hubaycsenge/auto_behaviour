@@ -11,16 +11,20 @@ root="$(dirname "$here")"
 
 python="${ABC_PYTHON:-}"
 if [ -z "$python" ]; then
-  # .venv-client is last: it is the client environment, which has codecs but
-  # none of the engines. It is still a better answer than the system python on
-  # a machine that only ever runs the client.
-  for candidate in \
-      "${ABC_VENV:-}/bin/python" \
-      "$root/.venv/bin/python" \
-      "$HOME/abc_env/bin/python" \
-      "${ABC_CLIENT_VENV:-}/bin/python" \
-      "$root/.venv-client/bin/python"; do
-    if [ -n "$candidate" ] && [ -x "$candidate" ]; then python="$candidate"; break; fi
+  # Built conditionally: "${VAR:-}/bin/python" with VAR unset yields the
+  # non-empty string "/bin/python", which exists on many systems, so testing
+  # the candidate for "non-empty" would silently pick the wrong interpreter.
+  # .venv-client comes last: it is the client environment, which has codecs but
+  # none of the engines -- still better than the system python on a machine
+  # that only ever runs the client.
+  candidates=()
+  [ -n "${ABC_VENV:-}" ]        && candidates+=("$ABC_VENV/bin/python")
+  candidates+=("$root/.venv/bin/python")
+  [ -n "${HOME:-}" ]            && candidates+=("$HOME/abc_env/bin/python")
+  [ -n "${ABC_CLIENT_VENV:-}" ] && candidates+=("$ABC_CLIENT_VENV/bin/python")
+  candidates+=("$root/.venv-client/bin/python")
+  for candidate in "${candidates[@]}"; do
+    if [ -x "$candidate" ]; then python="$candidate"; break; fi
   done
 fi
 python="${python:-python3}"
