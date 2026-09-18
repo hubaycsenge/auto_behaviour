@@ -31,9 +31,22 @@ from ..common.boris import (
     ethogram_to_boris_file,
     migrate_subjects_to_episodes,
 )
-from ..common.config import ENGINE_PRESETS, engine_defaults, load_config
-from ..common.ethogram import Subject
-from ..common.jobspec import STAGING_UPLOAD, JobLayout, JobSpec
+from ..common.config import (
+    ENGINE_PRESETS,
+    engine_defaults,
+    load_config,
+    suggest_ownership,
+)
+from ..common.ethogram import EPISODE_CATEGORY, Subject
+from ..common.jobspec import (
+    STAGING_SHARED,
+    STAGING_UPLOAD,
+    EngineSpec,
+    JobLayout,
+    JobSpec,
+    ObservationSpec,
+    SlurmSpec,
+)
 from ..common.paths import ProbeToken
 from ..common.project_builder import write_project
 from ..version import PROTOCOL_VERSION, __version__
@@ -219,6 +232,123 @@ def cmd_verify_probe(args) -> int:
     """Confirm a client-written probe file is visible here (shared-filesystem test)."""
     _emit({"shared": ProbeToken(path=args.path, digest=args.digest).verify()})
     return 0
+
+
+def cmd_new_job(args) -> int:
+    """Create a job directory from a video folder and an ethogram.
+
+    The step between `abc scan` and `abc submit` that previously existed only
+    inside the GUI. Everything it writes is plain JSON, so the result can be
+    edited by hand before submitting.
+    """
+    cfg = load_config("server")
+    videos = pathlib.Path(args.videos).expanduser()
+
+    try:
+        paths = media_mod.discover_videos(videos, recursive=args.recursive)
+    except (NotADirectoryError, OSError) as exc:
+        _emit({"error": str(exc)})
+        return 2
+    if not paths:
+        _emit({"error": f"no media files in {videos}"})
+        return 2
+
+    duplicates = media_mod.duplicate_observation_ids(paths)
+    if duplicates and not args.force:
+        _emit({
+            "error": "these files would claim the same observation ID; rename one "
+                     "of each pair or pass --force to skip them",
+            "duplicate_observation_ids": {k: [str(x) for x in v]
+                                          for k, v in duplicates.items()},
+        })
+        return 2
+    paths = [p for p in paths if p.stem not in duplicates]
+    if args.limit:
+        paths = paths[: args.limit]
+
+    # -- ethogram ---------------------------------------------------------
+    source = pathlib.Path(args.ethogram).expanduser()
+    try:
+        etho = (BorisProject.load(source).ethogram
+                if source.suffix.lower() == ".boris" else ethogram_from_table(source))
+    except Exception as exc:  # noqa: BLE001 - a bad file is the user's to see
+        _emit({"error": f"cannot read ethogram {source}: {exc}"})
+        return 2
+
+    if args.subject:
+        etho.subjects = [Subject(name=n.strip()) for n in args.subject if n.strip()]
+    if args.subjects_from:
+        etho.subjects = ethogram_from_table(
+            pathlib.Path(args.subjects_from).expanduser()).subjects
+
+    # Trial phases belong in a category of state behaviours, not the subject
+    # field -- see docs/user-guide.md. Anything matching the prefix is moved.
+    episodes: list[str] = []
+    if args.episode_prefix:
+        prefix = args.episode_prefix.lower()
+        for b in etho.behaviors:
+            if b.code.lower().startswith(prefix):
+                b.category = EPISODE_CATEGORY
+                b.type = "State event"
+                episodes.append(b.code)
+        if episodes and EPISODE_CATEGORY not in etho.categories:
+            etho.categories.append(EPISODE_CATEGORY)
+
+    # -- engines ----------------------------------------------------------
+    engines: list[EngineSpec] = []
+    for name in args.engine:
+        if name not in ENGINE_PRESETS:
+            _emit({"error": f"unknown engine {name!r}; known: "
+                            f"{', '.join(sorted(ENGINE_PRESETS))}"})
+            return 2
+        defaults = engine_defaults(name, cfg)
+        engines.append(EngineSpec(name=name, options=defaults["options"],
+                                  slurm=SlurmSpec.from_dict(defaults["slurm"])))
+
+    # -- observations -----------------------------------------------------
+    job = JobSpec(
+        project_name=args.name or f"ABC {videos.name}",
+        ethogram=etho, engines=engines, staging=STAGING_SHARED,
+        client_source_dir=str(videos.resolve()),
+    )
+    probed = 0
+    for path in paths:
+        info = None
+        if not args.no_probe:
+            try:
+                info = media_mod.probe(path)
+                probed += 1
+            except Exception:  # noqa: BLE001 - probing is best-effort
+                info = None
+        job.observations.append(ObservationSpec(
+            observation_id=media_mod.observation_id_for(path),
+            server_media=[str(path.resolve())],
+            client_media=[str(path.resolve())],
+            info=[info] if info else [],
+        ))
+
+    if args.own:
+        job.ownership = suggest_ownership(etho.codes, [e.name for e in engines])
+
+    root = pathlib.Path(args.job_dir).expanduser() if args.job_dir else (
+        pathlib.Path(cfg["server"]["jobs_root"]).expanduser() / job.job_id)
+    JobLayout(root).ensure()
+    job.job_dir = str(root)
+    job.save(root / "job.json")
+
+    problems = job.validate()
+    _emit({
+        "job_dir": str(root), "job_id": job.job_id,
+        "observations": len(job.observations), "probed": probed,
+        "behaviors": len(etho), "subjects": etho.subject_names,
+        "episode_behaviors": episodes,
+        "engines": [e.name for e in engines],
+        "ownership": job.ownership,
+        "skipped_duplicates": sorted(duplicates),
+        "problems": problems,
+        "next": f"abc submit {root}",
+    })
+    return 0 if not problems else 1
 
 
 def cmd_submit(args) -> int:
@@ -505,6 +635,31 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("path")
     p.add_argument("digest")
     p.set_defaults(func=cmd_verify_probe)
+
+    p = sub.add_parser("new-job", help="create a job from a video folder + ethogram")
+    p.add_argument("--videos", required=True, help="folder of media files")
+    p.add_argument("--ethogram", required=True,
+                   help=".boris project or BORIS ethogram spreadsheet")
+    p.add_argument("--engine", action="append", required=True,
+                   help="engine to run (repeatable)")
+    p.add_argument("--subject", action="append",
+                   help="a real subject, e.g. --subject Dog (repeatable)")
+    p.add_argument("--subjects-from", default="",
+                   help="a BORIS subjects spreadsheet to take subjects from")
+    p.add_argument("--episode-prefix", default="",
+                   help="move behaviours whose code starts with this into the "
+                        "'Episode' category as state events, e.g. --episode-prefix Episode")
+    p.add_argument("--name", default="", help="project name")
+    p.add_argument("--job-dir", default="", help="where to create the job")
+    p.add_argument("--limit", type=int, default=0, help="use only the first N videos")
+    p.add_argument("--recursive", action="store_true")
+    p.add_argument("--no-probe", action="store_true",
+                   help="skip reading durations (faster, but BORIS needs them)")
+    p.add_argument("--own", action="store_true",
+                   help="pre-fill which engine is authoritative for each behaviour")
+    p.add_argument("--force", action="store_true",
+                   help="skip colliding observation IDs instead of refusing")
+    p.set_defaults(func=cmd_new_job)
 
     p = sub.add_parser("submit", help="submit a job's SLURM array jobs")
     p.add_argument("job_dir")

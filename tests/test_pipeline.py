@@ -1,5 +1,6 @@
 """Job manifests, sharding, engine matching and the full offline round trip."""
 
+import json
 import pathlib
 import tempfile
 import unittest
@@ -123,6 +124,85 @@ class TestSbatch(unittest.TestCase):
         self.assertIn("#SBATCH --nodelist=nipg38", text)
         self.assertIn("abcoder.server.runner", text)
         self.assertIn("set -euo pipefail", text)
+
+
+class TestNewJobCommand(unittest.TestCase):
+    """`abc new-job` -- the step between scanning a folder and submitting."""
+
+    def _run(self, *args) -> dict:
+        import io
+        import sys as _sys
+
+        from abcoder.server.cli import build_parser
+
+        parsed = build_parser().parse_args(["new-job", *args])
+        stdout, _sys.stdout = _sys.stdout, io.StringIO()
+        try:
+            parsed.func(parsed)
+            return json.loads(_sys.stdout.getvalue())
+        finally:
+            _sys.stdout = stdout
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.videos = pathlib.Path(self.tmp.name) / "videos"
+        self.videos.mkdir()
+        for name in ("03_30_152.mp4", "04_05_162.mp4"):
+            (self.videos / name).write_bytes(b"x")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_builds_a_submittable_job(self):
+        out = self._run(
+            "--videos", str(self.videos),
+            "--ethogram", str(FIXTURES["ethogram_xlsx"]),
+            "--engine", "mock", "--subject", "Dog",
+            "--job-dir", str(pathlib.Path(self.tmp.name) / "job"),
+            "--no-probe")
+        self.assertEqual(out["observations"], 2)
+        self.assertEqual(out["problems"], [])
+        job = JobSpec.load(pathlib.Path(out["job_dir"]) / "job.json")
+        self.assertEqual(job.validate(), [])
+        self.assertEqual(sorted(o.observation_id for o in job.observations),
+                         ["03_30_152", "04_05_162"])
+
+    def test_episode_prefix_moves_phases_out_of_the_subject_field(self):
+        out = self._run(
+            "--videos", str(self.videos),
+            "--ethogram", str(FIXTURES["ethogram_xlsx"]),
+            "--engine", "mock", "--subject", "Dog",
+            "--episode-prefix", "Episode",
+            "--job-dir", str(pathlib.Path(self.tmp.name) / "job2"),
+            "--no-probe")
+        self.assertEqual(len(out["episode_behaviors"]), 4)
+        job = JobSpec.load(pathlib.Path(out["job_dir"]) / "job.json")
+        self.assertEqual(job.ethogram.subject_names, ["Dog"])
+        for code in out["episode_behaviors"]:
+            behavior = job.ethogram.get(code)
+            self.assertEqual(behavior.category, EPISODE_CATEGORY)
+            self.assertTrue(behavior.is_state)
+
+    def test_colliding_observation_ids_are_refused(self):
+        (self.videos / "03_30_152.MOV").write_bytes(b"x")
+        out = self._run(
+            "--videos", str(self.videos),
+            "--ethogram", str(FIXTURES["ethogram_xlsx"]),
+            "--engine", "mock",
+            "--job-dir", str(pathlib.Path(self.tmp.name) / "job3"),
+            "--no-probe")
+        self.assertIn("error", out)
+        self.assertIn("03_30_152", out["duplicate_observation_ids"])
+
+    def test_ownership_can_be_prefilled(self):
+        out = self._run(
+            "--videos", str(self.videos),
+            "--ethogram", str(FIXTURES["ethogram_xlsx"]),
+            "--engine", "audio", "--engine", "pose", "--own",
+            "--job-dir", str(pathlib.Path(self.tmp.name) / "job4"),
+            "--no-probe")
+        self.assertEqual(out["ownership"]["Growl"], "audio")
+        self.assertEqual(out["ownership"]["Approaching robot"], "pose")
 
 
 class TestSubmissionPreflight(unittest.TestCase):

@@ -299,6 +299,14 @@ for a working end-to-end script, and:
 ```bash
 abc check                             # what can this machine run?
 abc scan  /path/to/videos             # files -> observation IDs
+
+# build a job: the command-line equivalent of tabs 1-3
+abc new-job --videos /path/to/videos \
+            --ethogram ethogram.xlsx \
+            --subject Dog --subject Owner \
+            --episode-prefix Episode \
+            --engine vlm_llamacpp --own
+
 abc submit  <job-dir> [--dry-run]
 abc status  <job-dir> --per-observation
 abc collect <job-dir> -o project.boris

@@ -103,6 +103,7 @@ running these over SSH.
 abc check                             # versions, GPU, which engines are installed
 abc engines                           # catalogue and defaults, as JSON
 abc scan  /path/to/videos             # files → observation IDs, with collisions flagged
+abc new-job --videos DIR --ethogram FILE --engine NAME --subject Dog
 abc submit  <job-dir> [--dry-run]     # queue the SLURM array jobs
 abc status  <job-dir> --per-observation
 abc collect <job-dir> -o project.boris

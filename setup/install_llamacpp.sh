@@ -35,20 +35,45 @@ done
 # real binary inside, so the ABC virtualenv is a perfectly good place to get
 # one without root. It must be invoked by absolute path: cmake derives its
 # module root from argv[0], and a relative path breaks that.
-cmake="$(command -v cmake || true)"
+# A cmake is only usable if its share/cmake-*/Templates directory is present:
+# some PyPI cmake wheels ship Modules and Help but omit Templates, and any
+# project that calls include(CTest) then dies on a missing CTestScript.cmake.in.
+cmake_is_complete() {
+  local bin="$1" root
+  [ -x "$bin" ] || return 1
+  root="$(dirname "$(dirname "$bin")")"
+  ls -d "$root"/share/cmake-*/Templates >/dev/null 2>&1
+}
+
+pick_cmake() {
+  local candidate
+  candidate="$(command -v cmake || true)"
+  if cmake_is_complete "$candidate"; then echo "$candidate"; return 0; fi
+  candidate="$(ls -1 "$venv"/lib/python*/site-packages/cmake/data/bin/cmake 2>/dev/null | head -1 || true)"
+  if cmake_is_complete "$candidate"; then echo "$candidate"; return 0; fi
+  candidate="$prefix/cmake/bin/cmake"
+  if cmake_is_complete "$candidate"; then echo "$candidate"; return 0; fi
+  return 1
+}
+
+cmake="$(pick_cmake || true)"
 if [ -z "$cmake" ]; then
-  cmake="$(ls -1 "$venv"/lib/python*/site-packages/cmake/data/bin/cmake 2>/dev/null | head -1 || true)"
-fi
-if [ -z "$cmake" ]; then
-  echo "-- cmake not found; installing it into $venv"
-  if [ ! -x "$venv/bin/python" ]; then
-    echo "   no virtualenv at $venv. Run setup/install_server.sh first, or set ABC_VENV." >&2
+  # Kitware's own binary tarball is self-contained and complete, which the pip
+  # wheel is not. No root needed -- it unpacks into the ABC prefix.
+  cmake_version="${ABC_CMAKE_VERSION:-3.31.6}"
+  echo "-- no complete cmake found; fetching CMake $cmake_version from Kitware"
+  mkdir -p "$prefix/cmake"
+  tarball="cmake-$cmake_version-linux-x86_64.tar.gz"
+  url="https://github.com/Kitware/CMake/releases/download/v$cmake_version/$tarball"
+  curl -fL --progress-bar "$url" -o "$prefix/$tarball"
+  tar -xzf "$prefix/$tarball" -C "$prefix/cmake" --strip-components=1
+  rm -f "$prefix/$tarball"
+  cmake="$prefix/cmake/bin/cmake"
+  cmake_is_complete "$cmake" || {
+    echo "the downloaded CMake still looks incomplete; install one manually" >&2
     exit 1
-  fi
-  "$venv/bin/python" -m pip install -q cmake
-  cmake="$(ls -1 "$venv"/lib/python*/site-packages/cmake/data/bin/cmake 2>/dev/null | head -1 || true)"
+  }
 fi
-[ -n "$cmake" ] || { echo "cmake is still unavailable; install it and retry" >&2; exit 1; }
 cmake="$(cd "$(dirname "$cmake")" && pwd)/$(basename "$cmake")"
 echo "-- cmake: $cmake ($("$cmake" --version | head -1))"
 
@@ -123,9 +148,15 @@ else
 fi
 
 echo "-- configuring"
+# ABC uses exactly two binaries, both under tools/. Skipping llama.cpp's tests
+# and examples cuts most of the build, and skipping the tests also avoids
+# include(CTest), which needs cmake templates some distributions omit.
 "$cmake" -S "$src" -B "$src/build" \
   -DCMAKE_BUILD_TYPE=Release \
   -DLLAMA_CURL=OFF \
+  -DLLAMA_BUILD_TESTS=OFF \
+  -DLLAMA_BUILD_EXAMPLES=OFF \
+  -DLLAMA_BUILD_TOOLS=ON \
   "${cuda_args[@]}"
 
 echo "-- building with $jobs job(s)"
