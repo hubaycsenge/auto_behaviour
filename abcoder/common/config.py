@@ -121,6 +121,10 @@ ENGINE_PRESETS: dict[str, dict[str, Any]] = {
             "server_binary": "llama-server",
             "model_path": "",          # GGUF; set by the setup script or the user
             "mmproj_path": "",         # vision projector that matches the model
+            # Where the CUDA runtime libraries live, when the compute nodes have
+            # no toolkit of their own. Empty means "the lib/ directory beside
+            # the binary", which is where the installer puts them.
+            "cuda_lib_dir": "",
             "n_gpu_layers": 99,
             "context_size": 16384,
             "port": 0,                 # 0 = pick a free port per task

@@ -81,6 +81,22 @@ bin/abc-gui
 the full package adds several hundred megabytes of WebEngine and 3D modules it
 never touches.
 
+**The client and server environments are separate.** The server needs vLLM,
+torch and codecs but no Qt; the client needs Qt but none of the rest. `abc`
+runs in the server environment, `abc-gui` in the client one, and each finds its
+own — `abc-gui` does not defer to `abc`, or sourcing `abc-env.sh` would launch
+the GUI with an interpreter that has no PySide6.
+
+If the GUI reports `No module named 'PySide6'` after a successful-looking
+install, the usual cause is pip having installed into a *different* Python — a
+conda base environment, typically, since `pip` there is not the virtualenv's
+pip. `setup/install_client.sh` now verifies the import before reporting success
+and tells you the explicit command if it did not work:
+
+```bash
+.venv-client/bin/python -m pip install -r requirements-client.txt
+```
+
 Without paramiko the SSH transport falls back to the `ssh` and `scp` commands.
 That works, but gives no upload progress and needs key-based auth —
 `ssh-copy-id` first, because ABC never prompts for a password inside a command.

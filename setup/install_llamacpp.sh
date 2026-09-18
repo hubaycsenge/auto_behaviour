@@ -167,6 +167,38 @@ mkdir -p "$prefix/bin"
 cp "$src/build/bin/llama-server" "$prefix/bin/"
 cp "$src/build/bin/llama-mtmd-cli" "$prefix/bin/" 2>/dev/null || true
 
+# -- ship the CUDA runtime ---------------------------------------------------
+# llama.cpp links libcudart/libcublas dynamically, and on this cluster those
+# live only on the login node: a compute node has the driver (libcuda.so.1) but
+# no CUDA toolkit. Without this the binary builds fine and then fails to start
+# on every node that would actually run it. Copy whatever it really needs, as
+# reported by ldd, next to the binary; the engine adds this directory to
+# LD_LIBRARY_PATH automatically.
+if [ "$want_cuda" = 1 ]; then
+  mkdir -p "$prefix/lib"
+  missing=0
+  while read -r lib path; do
+    case "$lib" in
+      libcudart.so*|libcublas.so*|libcublasLt.so*|libnvrtc.so*|libcufft.so*)
+        if [ -e "$path" ]; then
+          cp -Lu "$path" "$prefix/lib/" 2>/dev/null || true
+        else
+          missing=1
+        fi
+        ;;
+    esac
+  done < <(ldd "$prefix/bin/llama-server" 2>/dev/null | awk '/=>/ {print $1, $3}')
+
+  shipped="$(ls -1 "$prefix/lib" 2>/dev/null | wc -l)"
+  if [ "$shipped" -gt 0 ]; then
+    echo "-- bundled $shipped CUDA runtime librar(y|ies) into $prefix/lib"
+    echo "   ($(du -sh "$prefix/lib" | cut -f1); compute nodes have no CUDA toolkit)"
+  elif [ "$missing" = 1 ]; then
+    echo "-- WARNING: could not locate the CUDA runtime libraries to bundle." >&2
+    echo "   llama-server may fail to start on nodes without a CUDA toolkit." >&2
+  fi
+fi
+
 # Make it persistent for anyone sourcing the ABC environment.
 if [ -f "$venv/abc-env.sh" ] && ! grep -q "abc_llama" "$venv/abc-env.sh"; then
   echo "export PATH=\"$prefix/bin:\$PATH\"" >> "$venv/abc-env.sh"
@@ -177,6 +209,7 @@ cat <<MSG
 
 == done ==
 Binary:  $prefix/bin/llama-server
+Runtime: $prefix/lib (CUDA libraries, found automatically by the engine)
 On PATH: export PATH="$prefix/bin:\$PATH"   (already added to abc-env.sh)
 
 Next:    setup/fetch_gguf.sh     downloads a model + its mmproj projector

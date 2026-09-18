@@ -11,7 +11,15 @@ root="$(dirname "$here")"
 
 python="${ABC_PYTHON:-}"
 if [ -z "$python" ]; then
-  for candidate in "${ABC_VENV:-}/bin/python" "$root/.venv/bin/python" "$HOME/abc_env/bin/python"; do
+  # .venv-client is last: it is the client environment, which has codecs but
+  # none of the engines. It is still a better answer than the system python on
+  # a machine that only ever runs the client.
+  for candidate in \
+      "${ABC_VENV:-}/bin/python" \
+      "$root/.venv/bin/python" \
+      "$HOME/abc_env/bin/python" \
+      "${ABC_CLIENT_VENV:-}/bin/python" \
+      "$root/.venv-client/bin/python"; do
     if [ -n "$candidate" ] && [ -x "$candidate" ]; then python="$candidate"; break; fi
   done
 fi

@@ -1,5 +1,62 @@
 #!/usr/bin/env bash
 # Launch the ABC client GUI.
+#
+# The GUI runs in the CLIENT environment, not the server one. They are separate
+# on purpose: the server needs vLLM, torch and codecs but no Qt; the client
+# needs Qt but none of the rest. Sourcing abc-env.sh sets ABC_VENV to the server
+# environment, so this must not simply defer to `abc`, or the GUI would be
+# launched by an interpreter that has no PySide6.
 set -euo pipefail
+
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$here/abc" gui "$@"
+root="$(dirname "$here")"
+
+python="${ABC_CLIENT_PYTHON:-}"
+if [ -z "$python" ]; then
+  for candidate in \
+      "${ABC_CLIENT_VENV:-}/bin/python" \
+      "$root/.venv-client/bin/python" \
+      "$HOME/abc_client_env/bin/python"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then python="$candidate"; break; fi
+  done
+fi
+# Last resort: whatever `abc` would use. Fine when one environment has both.
+if [ -z "$python" ]; then
+  python="${ABC_PYTHON:-}"
+  [ -z "$python" ] && [ -x "${ABC_VENV:-}/bin/python" ] && python="$ABC_VENV/bin/python"
+  python="${python:-python3}"
+fi
+
+if ! "$python" -c "import PySide6" >/dev/null 2>&1; then
+  cat >&2 <<MSG
+The ABC client needs PySide6, and $python does not have it.
+
+The client and server environments are separate: the server environment
+(ABC_VENV) deliberately has no Qt. Create the client environment:
+
+    $root/setup/install_client.sh
+
+then run this again. To use a specific interpreter instead:
+
+    ABC_CLIENT_PYTHON=/path/to/python $root/bin/abc-gui
+MSG
+  exit 1
+fi
+
+if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  cat >&2 <<MSG
+No display is set, so a window cannot be opened.
+
+If you are on a cluster over SSH, reconnect with X11 forwarding:
+
+    ssh -X $(whoami)@$(hostname -f 2>/dev/null || hostname)
+
+Otherwise run the client on your own machine -- it reaches the cluster over
+SSH and does not need to run on it. Everything the GUI does is also available
+from the command line (abc new-job, abc submit, abc status, abc collect).
+MSG
+  exit 1
+fi
+
+export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+exec "$python" -m abcoder.client.app "$@"

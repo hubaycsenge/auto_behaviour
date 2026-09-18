@@ -7,7 +7,7 @@ import unittest
 
 from abcoder.common.boris import BorisProject, ethogram_from_table, resolve_media_path
 from abcoder.common.config import ENGINE_PRESETS, engine_defaults, suggest_ownership
-from abcoder.common.ethogram import EPISODE_CATEGORY, Subject
+from abcoder.common.ethogram import EPISODE_CATEGORY, Ethogram, Subject
 from abcoder.common.events import MediaInfo
 from abcoder.common.jobspec import (
     STAGING_SHARED,
@@ -124,6 +124,48 @@ class TestSbatch(unittest.TestCase):
         self.assertIn("#SBATCH --nodelist=nipg38", text)
         self.assertIn("abcoder.server.runner", text)
         self.assertIn("set -euo pipefail", text)
+
+
+class TestLlamaCppRuntimeDiscovery(unittest.TestCase):
+    """The binary needs CUDA libraries the compute nodes do not have.
+
+    llama.cpp links libcudart/libcublas dynamically. A compute node has the
+    driver but no CUDA toolkit, so a binary built on a login node fails to
+    start unless the runtime travels with it.
+    """
+
+    def _engine(self, **options):
+        from abcoder.server.engines.vlm_llamacpp import LlamaCppEngine
+
+        return LlamaCppEngine(EngineContext(ethogram=Ethogram(), options=options))
+
+    def test_finds_the_lib_directory_beside_the_binary(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            (root / "bin").mkdir()
+            (root / "lib").mkdir()
+            binary = root / "bin" / "llama-server"
+            binary.touch()
+            dirs = self._engine()._library_dirs(str(binary))
+        self.assertEqual([p.name for p in dirs], ["lib"])
+
+    def test_no_lib_directory_is_not_an_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            binary = pathlib.Path(d) / "bin" / "llama-server"
+            binary.parent.mkdir()
+            binary.touch()
+            self.assertEqual(self._engine()._library_dirs(str(binary)), [])
+
+    def test_an_explicit_directory_takes_precedence(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            (root / "bin").mkdir()
+            (root / "lib").mkdir()
+            (root / "custom").mkdir()
+            binary = root / "bin" / "llama-server"
+            binary.touch()
+            dirs = self._engine(cuda_lib_dir=str(root / "custom"))._library_dirs(str(binary))
+        self.assertEqual([p.name for p in dirs], ["custom", "lib"])
 
 
 class TestNewJobCommand(unittest.TestCase):

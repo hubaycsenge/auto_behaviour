@@ -109,6 +109,18 @@ class LlamaCppEngine(Engine):
         cache = pathlib.Path(self.ctx.cache_dir or "~/.cache/llama").expanduser()
         env.setdefault("LLAMA_CACHE", str(cache))
 
+        # llama.cpp links the CUDA runtime dynamically, and a compute node
+        # typically has the driver but no CUDA toolkit -- the libraries live
+        # wherever the toolkit was installed, usually a login node. The
+        # installer bundles what the binary needs into a lib/ directory beside
+        # bin/, so look there rather than making the user set LD_LIBRARY_PATH.
+        for candidate in self._library_dirs(binary):
+            existing = env.get("LD_LIBRARY_PATH", "")
+            if str(candidate) not in existing.split(os.pathsep):
+                env["LD_LIBRARY_PATH"] = (
+                    f"{candidate}{os.pathsep}{existing}" if existing else str(candidate)
+                )
+
         try:
             self._proc = subprocess.Popen(
                 cmd, stdout=self._log_handle, stderr=subprocess.STDOUT, env=env
@@ -129,6 +141,26 @@ class LlamaCppEngine(Engine):
                 "'server_binary' to its full path."
             )
         return found
+
+    def _library_dirs(self, binary: str) -> list[pathlib.Path]:
+        """Directories to add to LD_LIBRARY_PATH for the server subprocess.
+
+        An explicit ``cuda_lib_dir`` option wins; otherwise the sibling ``lib``
+        of the binary's ``bin`` directory, which is where
+        ``setup/install_llamacpp.sh`` puts the bundled CUDA runtime.
+        """
+        out: list[pathlib.Path] = []
+        explicit = str(self.ctx.opt("cuda_lib_dir", "") or "")
+        if explicit:
+            path = pathlib.Path(explicit).expanduser()
+            if path.is_dir():
+                out.append(path)
+            else:
+                self._warn(f"cuda_lib_dir does not exist: {path}")
+        sibling = pathlib.Path(binary).resolve().parent.parent / "lib"
+        if sibling.is_dir() and sibling not in out:
+            out.append(sibling)
+        return out
 
     def _wait_for_health(self, timeout: float) -> None:
         """Poll /health until the model is loaded.

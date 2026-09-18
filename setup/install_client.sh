@@ -38,6 +38,26 @@ if [ "$want_ssh" = 1 ]; then
   $pip install -q "paramiko>=3.4"
 fi
 
+# Verify rather than assume: a virtualenv can be created and then fail to get
+# pip, and a `pip install` run outside it silently lands in whatever Python was
+# active -- a conda base environment, most often. Both look like success.
 echo
+if ! "$venv/bin/python" -c "import PySide6" >/dev/null 2>&1; then
+  echo "== FAILED ==" >&2
+  echo "PySide6 is not importable from $venv/bin/python." >&2
+  echo >&2
+  echo "If pip reported success, it probably installed into a different Python" >&2
+  echo "(a conda environment, say). Install explicitly into this one:" >&2
+  echo >&2
+  echo "    $venv/bin/python -m pip install -r $root/requirements-client.txt" >&2
+  exit 1
+fi
+
+version="$("$venv/bin/python" -c 'import PySide6; print(PySide6.__version__)')"
 echo "== done =="
-echo "Launch the GUI:  ABC_PYTHON=$venv/bin/python $root/bin/abc-gui"
+echo "PySide6 $version in $venv"
+echo
+echo "Launch the GUI:  $root/bin/abc-gui"
+echo
+echo "abc-gui finds this environment on its own -- no variable to set. To point"
+echo "it at a different interpreter:  ABC_CLIENT_PYTHON=/path/to/python $root/bin/abc-gui"
